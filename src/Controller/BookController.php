@@ -7,6 +7,7 @@ use App\Repository\AuthorRepository;
 use App\Repository\BookRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use JMS\Serializer\SerializationContext;
+use JMS\Serializer\Serializer;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
@@ -16,6 +17,7 @@ use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
 use Symfony\Component\Security\Http\Attribute\IsGranted;
 use Symfony\Component\Validator\Validator\ValidatorInterface;
+use Symfony\Config\JmsSerializer\DefaultContext\SerializationConfig;
 use Symfony\Contracts\Cache\ItemInterface;
 use Symfony\Contracts\Cache\TagAwareCacheInterface;
 
@@ -33,7 +35,8 @@ final class BookController extends AbstractController
             echo("L'ELEMENT N'EST PAS ENCORE EN CACHE !\n");
             $item->tag("booksCache");
             $bookList = $bookRepository->findAllWithPagination($page, $limit);
-            return $serializer->serialize($bookList, 'json', ['groups' => 'getBooks']);
+            $context = SerializationContext::create()->setGroups(["getBooks"]);
+            return $serializer->serialize($bookList, 'json', $context);
         });
         
         return new JsonResponse($jsonBookList, Response::HTTP_OK, [], true);
@@ -57,7 +60,7 @@ final class BookController extends AbstractController
 
     #[Route('/api/books', name:'createBook', methods: ['POST'])]
     #[IsGranted('ROLE_ADMIN', message: 'Vous n\'avez pas les droits nécessaires pour créer un livre')]
-    public function createBook(Request $request, SerializerInterface $serializer, EntityManagerInterface $em, UrlGeneratorInterface $urlGenerator, AuthorRepository $authorRepository, ValidatorInterface $validator): JsonResponse{
+    public function createBook(Request $request, SerializerInterface $serializer, EntityManagerInterface $em, UrlGeneratorInterface $urlGenerator, AuthorRepository $authorRepository, ValidatorInterface $validator, TagAwareCacheInterface $cache): JsonResponse{
         $book = $serializer->deserialize($request->getContent(), Book::class, 'json');
 
         $errors = $validator->validate($book);
@@ -65,17 +68,20 @@ final class BookController extends AbstractController
             return new JsonResponse($serializer->serialize($errors, 'json'), JsonResponse::HTTP_BAD_REQUEST, [], true);
         }
 
-        $em->persist($book);
-        $em->flush();
-
         $content = $request->toArray();
         $idAuthor = $content['idAuthor'] ?? -1;
 
         $book->setAuthor($authorRepository->find($idAuthor));
 
-        $jsonBook = $serializer->serialize($book, 'json', ['groups' => 'getBooks']);
+        $em->persist($book);
+        $em->flush();
 
+        $context = SerializationContext::create()->setGroups(["getBooks"]);
+
+        $jsonBook = $serializer->serialize($book, 'json', $context);
         $location = $urlGenerator->generate('detailBook', ['id' => $book->getId()], UrlGeneratorInterface::ABSOLUTE_URL);
+
+        $cache->invalidateTags(["booksCache"]);
 
         return new JsonResponse($jsonBook, Response::HTTP_CREATED, ["Location" => $location], true);
     }
